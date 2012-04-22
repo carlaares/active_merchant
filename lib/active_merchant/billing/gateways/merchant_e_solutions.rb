@@ -24,7 +24,9 @@ module ActiveMerchant #:nodoc:
 			end  
       
 			def authorize(money, creditcard_or_card_id, options = {})
-				post = {}
+				post = { }
+				post[:client_reference_number] = options[:customer] if options.has_key?(:customer)
+				post[:moto_ecommerce_ind] = options[:moto_ecommerce_ind] if options.has_key?(:moto_ecommerce_ind)
 				add_invoice(post, options)
 				add_payment_source(post, creditcard_or_card_id, options)        
 				add_address(post, options)        
@@ -32,7 +34,9 @@ module ActiveMerchant #:nodoc:
 			end
 
 			def purchase(money, creditcard_or_card_id, options = {})
-				post = {}
+				post = { }
+				post[:client_reference_number] = options[:customer] if options.has_key?(:customer)
+				post[:moto_ecommerce_ind] = options[:moto_ecommerce_ind] if options.has_key?(:moto_ecommerce_ind)
 				add_invoice(post, options)
 				add_payment_source(post, creditcard_or_card_id, options)        
 				add_address(post, options)   
@@ -40,35 +44,50 @@ module ActiveMerchant #:nodoc:
 			end                       
     
 			def capture(money, transaction_id, options = {})
-				post ={}
+				post = { }
 				post[:transaction_id] = transaction_id
+				post[:client_reference_number] = options[:customer] if options.has_key?(:customer)
 				commit('S', money, post)
 			end
 	  
 			def store(creditcard, options = {})
-				post = {}
+				post = { }
+				post[:client_reference_number] = options[:customer] if options.has_key?(:customer)
 				add_creditcard(post, creditcard, options) 
 				commit('T', nil, post)
 			end
 
 			def unstore(card_id)
-				post = {}
+				post = { }
+				post[:client_reference_number] = options[:customer] if options.has_key?(:customer)
 				post[:card_id] = card_id
 				commit('X', nil, post)
 			end
 
 			def refund(money, identification, options = {})
-				commit('U', money, options.merge(:transaction_id => identification))
+				post = { }
+				post[:transaction_id] = identification
+				post[:client_reference_number] = options[:customer] if options.has_key?(:customer)
+				options.delete(:customer)
+				options.delete(:billing_address)
+				commit('U', money, options.merge(post))
 			end
 
 			def credit(money, creditcard_or_card_id, options = {})
-				post = {}
+				post = {  }
+				post[:client_reference_number] = options[:customer] if options.has_key?(:customer)
+				add_invoice(post, options)
 				add_payment_source(post, creditcard_or_card_id, options)
 				commit('C', money, post)
 			end
 
 			def void(transaction_id, options = {})
-				commit('V', nil, options.merge(:transaction_id => transaction_id))
+				post = { }
+				post[:transaction_id] = identification
+				post[:client_reference_number] = options[:customer] if options.has_key?(:customer)
+				options.delete(:customer)
+				options.delete(:billing_address)
+				commit('V', nil, options.merge(post))
 			end
 
 			private
