@@ -68,7 +68,7 @@ module ActiveMerchant #:nodoc:
         post[:client_reference_number] = options[:customer] if options.has_key?(:customer)
         options.delete(:customer)
         options.delete(:billing_address)
-        commit('U', money, options.merge(:transaction_id => identification))
+        commit('U', money, options.merge(post))
       end
 
       def credit(money, creditcard_or_card_id, options = {})
@@ -81,7 +81,6 @@ module ActiveMerchant #:nodoc:
 
       def void(transaction_id, options = {})
         post = { }        
-        post[:transaction_id] = identification
         post[:client_reference_number] = options[:customer] if options.has_key?(:customer)
         options.delete(:customer)
         options.delete(:billing_address)
