@@ -18,7 +18,7 @@ class MerchantESolutionsTest < Test::Unit::TestCase
       :description => 'Store Purchase'
     }
   end
-  
+
   def test_successful_purchase
     @gateway.expects(:ssl_post).returns(successful_purchase_response)
     assert response = @gateway.purchase(@amount, @credit_card, @options)

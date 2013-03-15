@@ -129,11 +129,15 @@ module ActiveMerchant #:nodoc:
       end
 
       def commit(action, money, parameters)
-
         url = test? ? self.test_url : self.live_url
         parameters[:transaction_amount]  = amount(money) if money unless action == 'V'
 
-        response = parse( ssl_post(url, post_data(action,parameters)) )
+
+        response = begin
+          parse( ssl_post(url, post_data(action,parameters)) )
+        rescue ActiveMerchant::ResponseError => e
+          { "error_code" => "404",  "auth_response_text" => e.to_s }
+        end
 
         Response.new(response["error_code"] == "000", message_from(response), response,
           :authorization => response["transaction_id"],
@@ -141,7 +145,6 @@ module ActiveMerchant #:nodoc:
           :cvv_result => response["cvv2_result"],
           :avs_result => { :code => response["avs_result"] }
         )
-
       end
 
       def expdate(creditcard)
