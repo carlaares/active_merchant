@@ -1,96 +1,118 @@
 module ActiveMerchant #:nodoc:
   module Billing #:nodoc:
     class LitleGateway < Gateway
-      ONLINE_URL = 'https://payments.litle.com/vap/communicator/online'
-      TEST_ONLINE_URL = 'https://cert.litle.com/vap/communicator/online'
-      # or use an ssh tunnel to test
-      #TEST_ONLINE_URL = 'https://localhost:4443/vap/communicator/online'
+      # Specific to Litle options:
+      # * <tt>:merchant_id</tt> - Merchant Id assigned by Litle
+      # * <tt>:user</tt> - Username assigned by Litle
+      # * <tt>:password</tt> - Password assigned by Litle
+      # * <tt>:version</tt> - The version of the api you are using (eg, '8.10')
+      # * <tt>:proxy_addr</tt> - Proxy address - nil if not needed
+      # * <tt>:proxy_port</tt> - Proxy port - nil if not needed
+      # * <tt>:url</tt> - URL assigned by Litle (for testing, use the sandbox)
+      #
+      # Standard Active Merchant options
+      # * <tt>:order_id</tt> - The order number
+      # * <tt>:ip</tt> - The IP address of the customer making the purchase
+      # * <tt>:customer</tt> - The name, customer number, or other information that identifies the customer
+      # * <tt>:invoice</tt> - The invoice number
+      # * <tt>:merchant</tt> - The name or description of the merchant offering the product
+      # * <tt>:description</tt> - A description of the transaction
+      # * <tt>:email</tt> - The email address of the customer
+      # * <tt>:currency</tt> - The currency of the transaction.  Only important when you are using a currency that is not the default with a gateway that supports multiple currencies.
+      # * <tt>:billing_address</tt> - A hash containing the billing address of the customer.
+      # * <tt>:shipping_address</tt> - A hash containing the shipping address of the customer.
+      #
+      # The <tt>:billing_address</tt>, and <tt>:shipping_address</tt> hashes can have the following keys:
+      #
+      # * <tt>:name</tt> - The full name of the customer.
+      # * <tt>:company</tt> - The company name of the customer.
+      # * <tt>:address1</tt> - The primary street address of the customer.
+      # * <tt>:address2</tt> - Additional line of address information.
+      # * <tt>:city</tt> - The city of the customer.
+      # * <tt>:state</tt> - The state of the customer.  The 2 digit code for US and Canadian addresses. The full name of the state or province for foreign addresses.
+      # * <tt>:country</tt> - The [ISO 3166-1-alpha-2 code](http://www.iso.org/iso/country_codes/iso_3166_code_lists/english_country_names_and_code_elements.htm) for the customer.
+      # * <tt>:zip</tt> - The zip or postal code of the customer.
+      # * <tt>:phone</tt> - The phone number of the customer.
 
-      BATCH_URL = 'https://payments.litle.com:15000'
-      #TEST_BATCH_URL = 'https://cert.litle.com:15000'
-      # or use an ssh tunnel to test
-      TEST_BATCH_URL = 'https://localhost:15000'
+      self.test_url = 'https://www.testlitle.com/sandbox/communicator/online'
+      self.live_url = 'https://payments.litle.com/vap/communicator/online'
 
-      LITLE_ONLINE_VERSION ='6.2'
-      LITLE_BATCH_VERSION = '6.2'
+      LITLE_SCHEMA_VERSION = '8.10'
 
       # The countries the gateway supports merchants from as 2 digit ISO country codes
       self.supported_countries = ['US']
 
       # The card types supported by the payment gateway
-      self.supported_cardtypes = [:visa, :master, :american_express, :discover]
+      self.supported_cardtypes = [:visa, :master, :american_express, :discover, :diners_club, :jcb]
 
       # The homepage URL of the gateway
       self.homepage_url = 'http://www.litle.com/'
 
       # The name of the gateway
-      self.display_name = 'Litle'
+      self.display_name = 'Litle & Co.'
 
-      self.money_format = :cents
+      self.default_currency = 'USD'
 
-      CARD_TYPES = {
+      def initialize(options = {})
+        begin
+          require 'LitleOnline'
+        rescue LoadError
+          raise "Could not load the LitleOnline gem (>= 08.13.2).  Use `gem install LitleOnline` to install it."
+        end
+
+        @litle = LitleOnline::LitleOnlineRequest.new
+
+        options[:version]  ||= LITLE_SCHEMA_VERSION
+        options[:merchant] ||= 'Default Report Group'
+        options[:user]     ||= options[:login]
+
+        requires!(options, :merchant_id, :user, :password, :merchant, :version)
+
+        super
+      end
+
+      def authorize(money, creditcard_or_token, options = {})
+        to_pass = build_authorize_request(money, creditcard_or_token, options)
+        build_response(:authorization, @litle.authorization(to_pass))
+      end
+
+      def purchase(money, creditcard_or_token, options = {})
+        to_pass = build_purchase_request(money, creditcard_or_token, options)
+        build_response(:sale, @litle.sale(to_pass))
+      end
+
+      def capture(money, authorization, options = {})
+        to_pass = create_capture_hash(money, authorization, options)
+        build_response(:capture, @litle.capture(to_pass))
+      end
+
+      def void(identification, options = {})
+        to_pass = create_void_hash(identification, options)
+        build_response(:void, @litle.void(to_pass))
+      end
+
+      def credit(money, identification, options = {})
+        to_pass = create_credit_hash(money, identification, options)
+        build_response(:credit, @litle.credit(to_pass))
+      end
+
+      def store(creditcard, options = {})
+        to_pass = create_token_hash(creditcard, options)
+        build_response(:registerToken, @litle.register_token_request(to_pass), %w(000 801 802))
+      end
+
+      private
+
+      CARD_TYPE = {
         'visa' => 'VI',
         'master' => 'MC',
         'american_express' => 'AX',
         'discover' => 'DI',
-        'diners_club' => 'DC',
-        'jcb' => 'JC',
+        'jcb' => 'DI',
+        'diners_club' => 'DI'
       }
 
-      # consider sme auth reversal responses as successful
-      SUCCESS_CODES = ['000', '111', '306']
-
-      RESPONSE_CODES = {
-        '000' => 'Approved',
-        '100' => 'Processing Network Unavailable',
-        '101' => 'Issuer Unavailable',
-        '102' => 'Re-submit Transaction',
-        '110' => 'Insufficient Funds',
-        '111' => 'Authorization amount has already been depleted',
-        '120' => 'Call Issuer',
-        '121' => 'Call AMEX',
-        '122' => 'Call Diners Club',
-        '123' => 'Call Discover',
-        '124' => 'Call JBS',
-        '125' => 'Call Visa/MasterCard',
-        '126' => 'Call Issuer ‐ Update Cardholder Data',
-        '127' => 'Exceeds Approval Amount Limit',
-        '130' => 'Call Indicated Number',
-        '140' => 'Update Cardholder Data',
-        '191' => 'The merchant is not registered in the update program.',
-        '301' => 'Invalid Account Number',
-        '302' => 'Account Number Does Not Match Payment Type',
-        '303' => 'Pick Up Card',
-        '304' => 'Lost/Stolen Card',
-        '305' => 'Expired Card',
-        '306' => 'Authorization has expired; no need to reverse',
-        '307' => 'Restricted Card',
-        '308' => 'Restricted Card ‐ Chargeback',
-        '310' => 'Invalid track data',
-        '311' => 'Deposit is already referenced by a chargeback',
-        '320' => 'Invalid Expiration Date',
-        '321' => 'Invalid Merchant',
-        '322' => 'Invalid Transaction',
-        '323' => 'No such issuer',
-        '324' => 'Invalid Pin',
-        '325' => 'Transaction not allowed at terminal',
-        '326' => 'Exceeds number of PIN entries',
-        '327' => 'Cardholder transaction not permitted',
-        '328' => 'Cardholder requested that recurring or installment payment be stoped',
-        '330' => 'Invalid Payment Type',
-        '340' => 'Invalid Amount',
-        '335' => 'This method of payment does not support authorization reversals',
-        '346' => 'Invalid billing descriptor prefix',
-        '349' => 'Do Not Honor',
-        '350' => 'Generic Decline',
-        '351' => 'Decline - Request Positive ID',
-        '352' => 'Decline CVV2/CID Fail',
-        '353' => 'Merchant requested decline due to AVS result',
-        '354' => '3-D Secure transaction not supported by merchant',
-      }
-
-      # map Litle AVS response codes to ActiveMerchant AVSResult codes
-      AVS_CODES = {
+      AVS_RESPONSE_CODE = {
         '00' => 'Y',
         '01' => 'X',
         '02' => 'D',
@@ -99,523 +121,201 @@ module ActiveMerchant #:nodoc:
         '12' => 'A',
         '13' => 'A',
         '14' => 'P',
-        '20' => 'C',
+        '20' => 'N',
         '30' => 'S',
         '31' => 'R',
         '32' => 'U',
         '33' => 'R',
         '34' => 'I',
-        '40' => 'U',
+        '40' => 'E'
       }
 
-      ORDER_SOURCE_3DSAUTH      = '3dsAuthenticated'
-      ORDER_SOURCE_3DSATTEMPT   = '3dsAuthenticated'
-      ORDER_SOURCE_ECOMMERCE    = 'ecommerce'
-#      ORDER_SOURCE_ECOMMERCE    = 'recommerce'
-      ORDER_SOURCE_INSTALLMENT  = 'installment'
-      ORDER_SOURCE_MAILORDER    = 'mailorder'
-      ORDER_SOURCE_RECURRING    = 'recurring'
-      ORDER_SOURCE_RETAIL       = 'retail'
-      ORDER_SOURCE_TELEPHONE    = 'telephone'
+      def url
+        return @options[:url] if @options[:url].present?
 
-      cattr_accessor :logger
-      self.logger = nil
-
-      def initialize(options = {})
-        #requires!(options, :login, :password)
-        @options = options
-        super
-        @batch_ids = []
-        unless @options[:log].nil?
-          self.logger = Logger.new(@options[:log])
-        end
+        test? ? self.test_url : self.live_url
       end
 
-      def authorize(*args)
-        if args.first.is_a?(Array)
-          # batch request
-          txns = args.first
-          txns.empty? ? [] : commit_batch(build_batch_request(:authorization_txns => txns))
-        else
-          money, authorization, options = args
-          commit_online('authorization', build_authorization_request(money, authorization, parse_options(options)))
-        end
-      end
+      def build_response(kind, litle_response, valid_responses=%w(000))
+        response = Hash.from_xml(litle_response.raw_xml.to_s)['litleOnlineResponse']
 
-      def capture(*args)
-        if args.first.is_a?(Array)
-          # batch request
-          txns = args.first
-          txns.empty? ? [] : commit_batch(build_batch_request(:capture_txns => txns))
-        else
-          money, authorization, options = args
-          commit_online('capture', build_capture_request(money, authorization, parse_options(options)))
-        end
-      end
-
-      def credit(*args)
-        if args.first.is_a?(Array)
-          # batch request
-          txns = args.first
-          txns.empty? ? [] :commit_batch(build_batch_request(:credit_txns => txns))
-        else
-          money, authorization_or_credit_card, options = args
-          commit_online('credit', build_credit_request(money, authorization_or_credit_card, parse_options(options)))
-        end
-      end
-
-      def purchase(*args)
-        if args.first.is_a?(Array)
-          txns = args.first
-          txns.empty? ? [] : commit_batch(build_batch_request(:sale_txns => txns))
-        else
-          money, credit_card, options = args
-          commit_online('sale', build_sale_request(money, credit_card, parse_options(options)))
-        end
-      end
-
-      # Auth Reversal params: void(money, authorization, options)
-      # Void params: void(authorization, options)
-      def void(*args)
-        if args.first.is_a?(Array)
-          txns = args.first
-          txns.empty? ? [] : commit_batch(build_batch_request(:void_txns => txns))
-        elsif args.first.is_a?(Numeric) or args.first == nil
-          money, authorization, options = args
-          options ||= {}
-          commit_online('authReversal', build_auth_reversal_request(money, authorization, parse_options(options)))
-        else
-          authorization, options = args
-          options ||= {}
-          commit_online('void', build_void_request(authorization, parse_options(options)))
-        end
-      end
-
-      # sends a response to a previous batch request, identified by the Litle session ID
-      # the Litle session ID is found through non-programatic means (call or Litle admin site)
-      def request_for_response(session_id)
-        commit_batch(build_rfr_request(session_id))
-      end
-
-
-    private
-
-      def parse_options(opts={})
-        options = {:report_group => 'online', :order_source => ORDER_SOURCE_ECOMMERCE}.merge(opts)
-        options[:report_group] = 'online' unless options[:report_group]
-        options
-      end
-
-      def expdate(credit_card)
-        year  = format(credit_card.year, :two_digits)
-        month = format(credit_card.month, :two_digits)
-        #if Time.now.utc < Time.utc(year, month, Date.today.day, 23, 59, 59)
-        #  exp="#{month}#{year}"
-        #else
-        #  exp=""
-        #end
-        #exp
-        "#{month}#{year}"
-      end
-
-      def unique_id(options, n=nil)
-        if !options.nil? and options.has_key?(:txn_id)
-          options[:txn_id].to_s[0..24]
-        else
-          if n.nil?
-            "#{Time.now.to_i}"[0..24]
+        if response['response'] == "0"
+          detail = response["#{kind}Response"]
+          fraud = fraud_result(detail)
+          authorization = case kind
+          when :registerToken
+            response['registerTokenResponse']['litleToken']
           else
-            "#{n}#{Time.now.to_i}"[0..24]
+            detail['litleTxnId']
           end
-        end
-      end
-
-      def build_address(address)
-        xml = Builder::XmlMarkup.new :indent => 2
-        xml.name(address[:name][0..99]) unless address[:name].blank?
-        xml.addressLine1(address[:address1][0..34]) unless address[:address1].blank?
-        xml.addressLine2(address[:address2][0..34]) unless address[:address2].blank?
-        xml.city(address[:city][0..34]) unless address[:city].blank?
-        xml.state(address[:state][0..29]) unless address[:state].blank?
-        xml.zip(address[:zip][0..19]) unless address[:zip].blank?
-        xml.country(address[:country][0..19]) unless address[:country].blank?
-        xml.phone(address[:phone][0..19]) unless address[:phone].blank?
-        xml.target!
-      end
-      def build_custom_billing(company)
-        xml = Builder::XmlMarkup.new :indent => 2
-        xml.phone(company[:phone][0..12]) unless company[:phone].blank?
-        xml.descriptor(company[:descriptor][0..24]) unless company[:descriptor].blank?
-        xml.target!
-      end
-      def build_card(credit_card)
-        xml = Builder::XmlMarkup.new :indent => 2
-        xml.type CARD_TYPES[credit_card.type]
-        xml.number credit_card.number
-        xml.expDate expdate(credit_card)
-        xml.cardValidationNum credit_card.verification_value if credit_card.verification_value
-        xml.target!
-      end
-
-      def build_authorization_request(money, credit_card, options)
-        # get a big random id, this should be unique enough. Doesn't have to be perfect
-        id = unique_id(options, options[:order_id])
-        @batch_ids << id
-        billing_address = options[:billing_address] || options[:address]
-        order_source = options[:order_source]
-        #custom_billing = options[:custom_billing]
-        # TODO - add customer_id back in
-        xml = Builder::XmlMarkup.new(:indent => 2)
-        xml.authorization(:id => id, :reportGroup => options[:report_group], :customerId => nil) do
-          xml.orderId(options[:order_id])
-          xml.amount(amount(money))
-          xml.orderSource(order_source)
-          xml.billToAddress do
-            xml << build_address(billing_address)
-          end if billing_address
-          xml.shipToAddres do
-            xml << build_address(options[:shipping_address])
-          end if options[:shipping_address]
-          xml.card do
-            xml << build_card(credit_card)
-          end
-#          xml.customBilling do
-#            xml << build_custom_billing(custom_billing)
-#          end
-          end
-        xml.target!
-      end
-
-      def build_capture_request(money, authorization, options)
-        id = unique_id(options, options[:order_id])
-        @batch_ids << id
-        capture_options = {:id => id, :reportGroup => options[:report_group], :customerId => nil}
-        if options.key?(:partial) and options[:partial]
-          capture_options[:partial] = 'true'
-        end
-
-        litle_txn_id, auth_code = authorization.split(';')
-        custom_billing = options[:custom_billing]
-        xml = Builder::XmlMarkup.new :indent => 2
-        xml.capture capture_options do
-          xml.litleTxnId litle_txn_id
-          xml.amount amount(money)
-          xml.customBilling do
-          xml << build_custom_billing(custom_billing)
-        end
-        end
-        xml.target!
-      end
-
-      def build_credit_request(money, authorization_or_credit_card, options)
-        id = unique_id(options, options[:order_id])
-        @batch_ids << id
-        if authorization_or_credit_card.is_a?(CreditCard)
-          non_litle = true
+          Response.new(
+            valid_responses.include?(detail['response']),
+            detail['message'],
+            {:litleOnlineResponse => response},
+            :authorization => authorization,
+            :avs_result => {:code => fraud['avs']},
+            :cvv_result => fraud['cvv'],
+            :test => test?
+          )
         else
-          non_litle = false
-          litle_txn_id, auth_code = authorization_or_credit_card.split(';')
+          Response.new(false, response['message'], :litleOnlineResponse => response, :test => test?)
         end
-        xml = Builder::XmlMarkup.new :indent => 2
-        xml.credit :id => id, :reportGroup => options[:report_group], :customerId => nil do
-          if non_litle
-            order_source = options[:order_source]
-            xml.orderId(options[:order_id])
-            xml.amount amount(money)
-            xml.orderSource(order_source)
-            xml.card do
-              xml << build_card(authorization_or_credit_card)
-            end
-          else
-            xml.litleTxnId litle_txn_id
-            xml.amount amount(money)
-          end
-        end
-        xml.target!
       end
 
-      def build_sale_request(money, credit_card, options)
-        id = unique_id(options, options[:order_id])
-        @batch_ids << id
-        billing_address = options[:billing_address] || options[:address]
-        order_source = options[:order_source]
-        custom_billing = options[:custom_billing]
-        xml = Builder::XmlMarkup.new(:indent => 2)
-        xml.sale(:id => id, :reportGroup => options[:report_group], :customerId => nil) do
-          xml.orderId(options[:order_id])
-          xml.amount(amount(money))
-          xml.orderSource(order_source)
-          xml.billToAddress do
-            xml << build_address(billing_address)
-          end if billing_address
-          xml.shipToAddres do
-            xml << build_address(options[:shipping_address])
-          end if options[:shipping_address]
-          xml.card do
-            xml << build_card(credit_card)
-          end
-          xml.customBilling do
-            xml << build_custom_billing(custom_billing)
-          end
-        end
-        xml.target!
+      def build_authorize_request(money, creditcard_or_token, options)
+        hash = create_hash(money, options)
+
+        add_credit_card_or_token_hash(hash, creditcard_or_token)
+
+        hash
       end
 
-      def build_void_request(authorization, options)
-        litle_txn_id, auth_code = authorization.split(';')
-        id = unique_id(options, litle_txn_id)
-        @batch_ids << id
-        xml = Builder::XmlMarkup.new :indent => 2
-        xml.void(:id => id, :reportGroup => options[:report_group], :customerId => nil) do
-          xml.litleTxnId litle_txn_id
-        end
-        xml.target!
+      def build_purchase_request(money, creditcard_or_token, options)
+        hash = create_hash(money, options)
+
+        add_credit_card_or_token_hash(hash, creditcard_or_token)
+
+        hash
       end
 
-      def build_auth_reversal_request(money, authorization, options)
-        litle_txn_id, auth_code = authorization.split(';')
-        id = unique_id(options, litle_txn_id)
-        @batch_ids << id
-
-        xml = Builder::XmlMarkup.new :indent => 2
-        xml.authReversal(:id => id, :reportGroup => options[:report_group], :customerId => nil) do
-          xml.litleTxnId litle_txn_id
-          xml.amount amount(money) if money
+      def add_credit_card_or_token_hash(hash, creditcard_or_token)
+        if creditcard_or_token.is_a?(String)
+          add_token_hash(hash, creditcard_or_token)
+        else
+          add_credit_card_hash(hash, creditcard_or_token)
         end
-        xml.target!
       end
 
-      def build_rfr_request(session_id)
-        total = 0
-        id = unique_id(@options, session_id)
-        xml = Builder::XmlMarkup.new :indent => 2
-        xml.instruct! :xml
-        xml.litleRequest(:version=>LITLE_BATCH_VERSION, :xmlns=>"http://www.litle.com/schema",
-            :id => unique_id(@options), :numBatchRequests => total ) do
-          xml.authentication do
-            xml.user(@options[:login])
-            xml.password(@options[:password])
-          end
-          xml.RFRRequest do
-            xml.litleSessionId(session_id)
-          end
-        end
-        xml.target!
-      end
-
-      def build_batch_request(*args)
-        # voids cannot be batched, so we assume that all batched void_txns are authReversals
-        opts = {
-          :authorization_txns => [],
-          :capture_txns => [],
-          :credit_txns => [],
-          :sale_txns => [],
-          :void_txns => []
+      def add_token_hash(hash, creditcard_or_token)
+        token_info = {
+            'litleToken' => creditcard_or_token
         }
-        opts.update(args.first) if args.first.is_a?(Hash)
-        @batch_ids = []
 
-        total = 1
-        xml = Builder::XmlMarkup.new :indent => 2
-        xml.instruct! :xml
-        xml.litleRequest(:version=>LITLE_BATCH_VERSION, :xmlns=>"http://www.litle.com/schema",
-            :id => unique_id(@options), :numBatchRequests => total ) do
-          xml.authentication do
-            xml.user(@options[:login])
-            xml.password(@options[:password])
+        hash['token'] = token_info
+        hash
+      end
+
+      def add_credit_card_hash(hash, creditcard)
+        cc_type     = CARD_TYPE[creditcard.brand]
+        exp_date_yr = creditcard.year.to_s[2..3]
+        exp_date_mo = '%02d' % creditcard.month.to_i
+        exp_date    = exp_date_mo + exp_date_yr
+
+        card_info = {
+            'type'              => cc_type,
+            'number'            => creditcard.number,
+            'expDate'           => exp_date,
+            'cardValidationNum' => creditcard.verification_value
+        }
+
+        hash['card'] = card_info
+        hash
+      end
+
+      def create_capture_hash(money, authorization, options)
+        hash = create_hash(money, options)
+        hash['litleTxnId'] = authorization
+        hash
+      end
+
+      def create_credit_hash(money, identification, options)
+        hash = create_hash(money, options)
+        hash['litleTxnId'] = identification
+        hash['orderSource'] = nil
+        hash['orderId'] = nil
+        hash
+      end
+
+      def create_token_hash(creditcard, options)
+        hash = create_hash(0, options)
+        hash['accountNumber'] = creditcard.number
+        hash
+      end
+
+      def create_void_hash(identification, options)
+        hash = create_hash(nil, options)
+        hash['litleTxnId'] = identification
+        hash
+      end
+
+      def create_hash(money, options)
+        fraud_check_type = {}
+        if options[:ip]
+          fraud_check_type['customerIpAddress'] = options[:ip]
+        end
+
+        enhanced_data = {}
+        if options[:invoice]
+          enhanced_data['invoiceReferenceNumber'] = options[:invoice]
+        end
+
+        if options[:description]
+          enhanced_data['customerReference'] = options[:description]
+        end
+
+        if options[:billing_address]
+          bill_to_address = {
+            'name' => options[:billing_address][:name],
+            'companyName' => options[:billing_address][:company],
+            'addressLine1' => options[:billing_address][:address1],
+            'addressLine2' => options[:billing_address][:address2],
+            'city' => options[:billing_address][:city],
+            'state' => options[:billing_address][:state],
+            'zip' => options[:billing_address][:zip],
+            'country' => options[:billing_address][:country],
+            'email' => options[:email],
+            'phone' => options[:billing_address][:phone]
+          }
+        end
+        if options[:shipping_address]
+          ship_to_address = {
+            'name' => options[:shipping_address][:name],
+            'companyName' => options[:shipping_address][:company],
+            'addressLine1' => options[:shipping_address][:address1],
+            'addressLine2' => options[:shipping_address][:address2],
+            'city' => options[:shipping_address][:city],
+            'state' => options[:shipping_address][:state],
+            'zip' => options[:shipping_address][:zip],
+            'country' => options[:shipping_address][:country],
+            'email' => options[:email],
+            'phone' => options[:shipping_address][:phone]
+          }
+        end
+
+        hash = {
+          'billToAddress' => bill_to_address,
+          'shipToAddress' => ship_to_address,
+          'orderId' => (options[:order_id] || @options[:order_id]),
+          'customerId' => options[:customer],
+          'reportGroup' => (options[:merchant] || @options[:merchant]),
+          'merchantId' => (options[:merchant_id] || @options[:merchant_id]),
+          'orderSource' => (options[:order_source] || 'ecommerce'),
+          'enhancedData' => enhanced_data,
+          'fraudCheckType' => fraud_check_type,
+          'user' => (options[:user] || @options[:user]),
+          'password' => (options[:password] || @options[:password]),
+          'version' => (options[:version] || @options[:version]),
+          'url' => (options[:url] || url),
+          'proxy_addr' => (options[:proxy_addr] || @options[:proxy_addr]),
+          'proxy_port' => (options[:proxy_port] || @options[:proxy_port]),
+          'id' => (options[:id] || options[:order_id] || @options[:order_id])
+        }
+
+        if( !money.nil? && money.to_s.length > 0 )
+          hash.merge!({'amount' => money})
+        end
+        hash
+      end
+
+      def fraud_result(authorization_response)
+        if result = authorization_response['fraudResult']
+          if result.key?('cardValidationResult')
+            cvv_to_pass = result['cardValidationResult'].blank? ? "P" : result['cardValidationResult']
           end
-          xml.batchRequest(:id => unique_id(@options),
-              :numAuths => opts[:authorization_txns].size,
-              :authAmount => opts[:authorization_txns].inject(0) {|sum, a| sum + a.first},
-              :numCaptures => opts[:capture_txns].size,
-              :captureAmount => opts[:capture_txns].inject(0) {|sum, a| sum + a.first},
-              :numCredits => opts[:credit_txns].size,
-              :creditAmount => opts[:credit_txns].inject(0) {|sum, a| sum + a.first},
-              :numSales => opts[:sale_txns].size,
-              :saleAmount => opts[:sale_txns].inject(0) {|sum, a| sum + a.first},
-              :numAuthReversals => opts[:void_txns].size,
-              :authReversalAmount => opts[:void_txns].inject(0) {|sum, a| a.first.nil? ? sum + 0 : sum + a.first},
-              :merchantId => @options[:merchant_key]) do
-            opts[:authorization_txns].each do |money, credit_card, options|
-              xml << build_authorization_request(money, credit_card, parse_options(options))
-            end
-            opts[:capture_txns].each do |money, authorization, options|
-              xml << build_capture_request(money, authorization, parse_options(options))
-            end
-            opts[:credit_txns].each do |money, authorization_or_credit_card, options|
-              xml << build_credit_request(money, authorization_or_credit_card, parse_options(options))
-            end
-            opts[:sale_txns].each do |money, credit_card, options|
-              xml << build_sale_request(money, credit_card, parse_options(options))
-            end
-            opts[:void_txns].each do |args|
-              # cannot batch void requests, only batch authReversals
-              if args.first.is_a?(Numeric) or args.first == nil
-                money, authorization, options = args
-                xml << build_auth_reversal_request(money, authorization, parse_options(options))
-              end
-            end
-          end
+
+          avs_to_pass = AVS_RESPONSE_CODE[result['avsResult']] unless result['avsResult'].blank?
         end
-        xml.target!
-      end
-
-      def build_online_request(body)
-        xml = Builder::XmlMarkup.new(:indent => 2)
-        xml.instruct! :xml
-        xml.litleOnlineRequest(:version=>LITLE_ONLINE_VERSION, :merchantId=> @options[:merchant_key], :xmlns=>"http://www.litle.com/schema/online" ) do
-          xml.authentication do
-            xml.user(@options[:login])
-            xml.password(@options[:password])
-          end
-          xml << body
-        end
-        xml.target!
-      end
-
-      def parse_element(response, node)
-        if node.has_elements?
-          node.elements.each{|e| parse_element(response, e) }
-        else
-          response[node.name.underscore.to_sym] = node.text #.strip
-        end
-      end
-
-      def parse_online(action, xml)
-        response = {}
-        response[:litle_batch_id] = nil
-        error_messages = []
-        error_codes = []
-        log ">>> RESPONSE ONLINE: #{xml}"
-        xml = REXML::Document.new(xml)
-        if root = REXML::XPath.first(xml, "litleOnlineResponse") and root.attributes['response'] == '0'
-          root.elements.each do |node|
-            # put the txn type into the response so it can be verified
-            if node.name =~ /^(.+)Response$/
-              response[:litle_txn_type] = $1
-              response[:txn_id] = node.attributes['id']
-              response[:report_group] = node.attributes['reportGroup']
-            end
-            parse_element(response, node)
-          end
-          # response[:error_codes] = error_codes.uniq.join(",") unless error_codes.empty?
-        else
-          response[:code] = "#{root.attributes['code']}"
-          response[:message] = "#{root.attributes['message']}" # send code
-        end
-        response
-      end
-
-      def parse_batch(xml)
-        # TODO - Match up response with corresponding request and fill in the order_id,
-        # or can we assume the response is in the same order as the send?  really?
-        response = {}
-        unsorted_responses = {}
-        error_messages = []
-        error_codes = []
-        log ">>> RESPONSE BATCH: #{xml}"
-        xml = REXML::Document.new(xml)
-        if root = REXML::XPath.first(xml, "litleResponse") and root.attributes['response'] == '0'
-          root.elements.each do |node|
-            if node.name == "batchResponse"
-              litle_batch_id = node.attributes['litleBatchId']
-              node.elements.each do |node|
-                response = {}
-                response[:litle_batch_id] = litle_batch_id
-                # put the txn type into the response so it can be verified
-                if node.name =~ /^(.+)Response$/
-                  response[:litle_txn_type] = $1
-                  response[:txn_id] = node.attributes['id']
-                  response[:report_group] = node.attributes['reportGroup']
-                end
-                parse_element(response, node)
-                unsorted_responses[node.attributes['id'].to_s] = response
-              end
-            else
-              response[:message] = "#{root.attributes['message']}"
-            end
-          end
-          # response[:error_codes] = error_codes.uniq.join(",") unless error_codes.empty?
-        else
-          response[:message] = "#{root.attributes['message']}"
-        end
-        if unsorted_responses.empty?
-          response
-        else
-          if @batch_ids.empty?
-            unsorted_responses.map { |id, r| r }
-          else
-            @batch_ids.map {|id| unsorted_responses[id.to_s]}
-          end
-        end
-      end
-
-      def online_url
-        test? ? TEST_ONLINE_URL : ONLINE_URL
-      end
-
-      def batch_url
-        test? ? TEST_BATCH_URL : BATCH_URL
-      end
-
-      def create_response(raw_response)
-        Response.new(successful?(raw_response), message_from(raw_response), raw_response,
-            :test => test?,
-            :authorization => successful?(raw_response) ? authorization_from(raw_response) : nil,
-            :avs_result => { :code => AVS_CODES[raw_response[:avs_result]] },
-            :cvv_result => raw_response[:card_validation_result]
-        )
-      end
-
-      def commit_batch(request)
-        log ">>> REQUEST BATCH: #{request}"
-        raw_responses = parse_batch(ssl_post(batch_url, request))
-        if raw_responses.is_a?(Array)
-          responses = []
-          raw_responses.each do |raw_response|
-            responses.push(create_response(raw_response))
-          end
-          responses
-        else
-          # must be an error
-          create_response(raw_responses)
-        end
-      end
-
-      def commit_online(action, request)
-        log ">>> REQUEST ONLINE: #{build_online_request(request)}"
-        raw_response = parse_online(action, ssl_post(online_url, build_online_request(request)))
-        create_response(raw_response)
-      end
-
-      def successful?(raw_response)
-        SUCCESS_CODES.include? raw_response[:response]
-      end
-
-      def message_from(raw_response)
-        "#{raw_response[:code]},#{raw_response[:message]}"
-      end
-
-      def authorization_from(raw_response)
-        "#{raw_response[:litle_txn_id]};#{raw_response[:auth_code]}"
-      end
-
-      def log(message)
-#        logg=Logger.new(STDERR)
-#        logg.info(sanitize(message))
-        self.logger.info(sanitize(message)) unless self.logger.nil?
-      end
-
-      FILTER_FIELD_LOGGING = ['password']
-
-      def sanitize(string)
-        FILTER_FIELD_LOGGING.each do |field|
-          string = string.gsub(/<#{field}>(.*)<\/#{field}>/, "<#{field}></#{field}>")
-        end
-
-        # replace number
-        string = string.gsub(/<number>(.*)(\d{4})<\/number>/) { '<number>' + 'x' * $1.size + $2 + '</number>' }
-        return string
+        {'cvv'=>cvv_to_pass, 'avs'=>avs_to_pass}
       end
     end
   end
