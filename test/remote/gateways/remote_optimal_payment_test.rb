@@ -11,7 +11,8 @@ class RemoteOptimalPaymentTest < Test::Unit::TestCase
     @options = {
       :order_id => '1',
       :billing_address => address,
-      :description => 'Basic Subscription'
+      :description => 'Basic Subscription',
+      :email => 'email@example.com'
     }
   end
 
@@ -43,7 +44,7 @@ class RemoteOptimalPaymentTest < Test::Unit::TestCase
       :year => Time.now.year + 1,
       :first_name => 'Longbob',
       :last_name => 'Longsen',
-      :type => 'visa'
+      :brand => 'visa'
     )
     assert response = @gateway.purchase(@amount, credit_card, options)
     assert_success response

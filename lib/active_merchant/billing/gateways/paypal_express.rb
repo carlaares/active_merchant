@@ -1,5 +1,6 @@
 require File.dirname(__FILE__) + '/paypal/paypal_common_api'
 require File.dirname(__FILE__) + '/paypal/paypal_express_response'
+require File.dirname(__FILE__) + '/paypal/paypal_recurring_api'
 require File.dirname(__FILE__) + '/paypal_express_common'
 
 module ActiveMerchant #:nodoc:
@@ -7,21 +8,38 @@ module ActiveMerchant #:nodoc:
     class PaypalExpressGateway < Gateway
       include PaypalCommonAPI
       include PaypalExpressCommon
-      
+      include PaypalRecurringApi
+
+      NON_STANDARD_LOCALE_CODES = {
+        'DK' => 'da_DK',
+        'IL' => 'he_IL',
+        'ID' => 'id_ID',
+        'JP' => 'jp_JP',
+        'NO' => 'no_NO',
+        'BR' => 'pt_BR',
+        'RU' => 'ru_RU',
+        'SE' => 'sv_SE',
+        'TH' => 'th_TH',
+        'TR' => 'tr_TR',
+        'CN' => 'zh_CN',
+        'HK' => 'zh_HK',
+        'TW' => 'zh_TW'
+      }
+
       self.test_redirect_url = 'https://www.sandbox.paypal.com/cgi-bin/webscr'
       self.supported_countries = ['US']
       self.homepage_url = 'https://www.paypal.com/cgi-bin/webscr?cmd=xpt/merchant/ExpressCheckoutIntro-outside'
       self.display_name = 'PayPal Express Checkout'
-      
+
       def setup_authorization(money, options = {})
         requires!(options, :return_url, :cancel_return_url)
-        
+
         commit 'SetExpressCheckout', build_setup_request('Authorization', money, options)
       end
-      
+
       def setup_purchase(money, options = {})
         requires!(options, :return_url, :cancel_return_url)
-        
+
         commit 'SetExpressCheckout', build_setup_request('Sale', money, options)
       end
 
@@ -31,13 +49,13 @@ module ActiveMerchant #:nodoc:
 
       def authorize(money, options = {})
         requires!(options, :token, :payer_id)
-      
+
         commit 'DoExpressCheckoutPayment', build_sale_or_authorization_request('Authorization', money, options)
       end
 
       def purchase(money, options = {})
         requires!(options, :token, :payer_id)
-        
+
         commit 'DoExpressCheckoutPayment', build_sale_or_authorization_request('Sale', money, options)
       end
 
@@ -59,10 +77,10 @@ module ActiveMerchant #:nodoc:
 
         xml.target!
       end
-      
+
       def build_sale_or_authorization_request(action, money, options)
         currency_code = options[:currency] || currency(money)
-        
+
         xml = Builder::XmlMarkup.new :indent => 2
         xml.tag! 'DoExpressCheckoutPaymentReq', 'xmlns' => PAYPAL_NAMESPACE do
           xml.tag! 'DoExpressCheckoutPaymentRequest', 'xmlns:n2' => EBAY_NAMESPACE do
@@ -97,7 +115,7 @@ module ActiveMerchant #:nodoc:
               end
               xml.tag! 'n2:NoShipping', options[:no_shipping] ? '1' : '0'
               xml.tag! 'n2:AddressOverride', options[:address_override] ? '1' : '0'
-              xml.tag! 'n2:LocaleCode', options[:locale] unless options[:locale].blank?
+              xml.tag! 'n2:LocaleCode', locale_code(options[:locale]) unless options[:locale].blank?
               xml.tag! 'n2:BrandName', options[:brand_name] unless options[:brand_name].blank?
               # Customization of the payment page
               xml.tag! 'n2:PageStyle', options[:page_style] unless options[:page_style].blank?
@@ -123,7 +141,7 @@ module ActiveMerchant #:nodoc:
                 xml.tag! 'n2:AllowNote', options[:allow_note] ? '1' : '0'
               end
               xml.tag! 'n2:CallbackURL', options[:callback_url] unless options[:callback_url].blank?
-              
+
               add_payment_details(xml, with_money_default(money), currency_code, options)
               if options[:shipping_options]
                 options[:shipping_options].each do |shipping_option|
@@ -137,16 +155,20 @@ module ActiveMerchant #:nodoc:
 
               xml.tag! 'n2:CallbackTimeout', options[:callback_timeout] unless options[:callback_timeout].blank?
               xml.tag! 'n2:CallbackVersion', options[:callback_version] unless options[:callback_version].blank?
+
+              if options.has_key?(:allow_buyer_optin)
+                xml.tag! 'n2:BuyerEmailOptInEnable', (options[:allow_buyer_optin] ? '1' : '0')
+              end
             end
           end
         end
 
         xml.target!
       end
-      
+
       def build_reference_transaction_request(action, money, options)
         currency_code = options[:currency] || currency(money)
-        
+
         # I am not sure why it's set like this for express gateway
         # but I don't want to break the existing behavior
         xml = Builder::XmlMarkup.new :indent => 2
@@ -172,6 +194,10 @@ module ActiveMerchant #:nodoc:
 
       def with_money_default(money)
         amount(money).to_f.zero? ? 100 : money
+      end
+
+      def locale_code(country_code)
+        NON_STANDARD_LOCALE_CODES[country_code] || country_code
       end
     end
   end

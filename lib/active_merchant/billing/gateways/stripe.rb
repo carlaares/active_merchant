@@ -3,7 +3,7 @@ require 'json'
 module ActiveMerchant #:nodoc:
   module Billing #:nodoc:
     class StripeGateway < Gateway
-      LIVE_URL = 'https://api.stripe.com/v1/'
+      self.live_url = 'https://api.stripe.com/v1/'
 
       AVS_CODE_TRANSLATOR = {
         'line1: pass, zip: pass' => 'Y',
@@ -21,7 +21,7 @@ module ActiveMerchant #:nodoc:
         'unchecked' => 'P'
       }
 
-      self.supported_countries = ['US']
+      self.supported_countries = ['US', 'CA']
       self.default_currency = 'USD'
       self.money_format = :cents
       self.supported_cardtypes = [:visa, :master, :american_express, :discover, :jcb, :diners_club]
@@ -48,7 +48,9 @@ module ActiveMerchant #:nodoc:
         add_amount(post, money, options)
         add_creditcard(post, creditcard, options)
         add_customer(post, options)
+        add_customer_data(post,options)
         post[:description] = options[:description] || options[:email]
+        post[:application_fee] = options[:application_fee] if options[:application_fee]
         add_flags(post, options)
 
         meta = generate_meta(options)
@@ -56,14 +58,6 @@ module ActiveMerchant #:nodoc:
         raise ArgumentError.new("Customer or Credit Card required.") if !post[:card] && !post[:customer]
 
         commit(:post, 'charges', post, meta)
-      end
-
-      def authorize(money, creditcard, options = {})
-        raise "Stripe does not support separate authorization and capture"
-      end
-
-      def capture(money, identification, options = {})
-        raise "Stripe does not support separate authorization and capture"
       end
 
       def void(identification, options = {})
@@ -113,8 +107,11 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_customer_data(post, options)
-        post[:description] = options[:description]
-        post[:email] = options[:email]
+        metadata_options = [:description,:browser_ip,:user_agent,:referrer]
+        post.update(options.slice(*metadata_options))
+
+        post[:external_id] = options[:order_id]
+        post[:payment_user_agent] = "Stripe/v1 ActiveMerchantBindings/#{ActiveMerchant::VERSION}"
       end
 
       def add_address(post, options)
@@ -125,6 +122,7 @@ module ActiveMerchant #:nodoc:
           post[:card][:address_country] = address[:country] if address[:country]
           post[:card][:address_zip] = address[:zip] if address[:zip]
           post[:card][:address_state] = address[:state] if address[:state]
+          post[:card][:address_city] = address[:city] if address[:city]
         end
       end
 
@@ -199,7 +197,7 @@ module ActiveMerchant #:nodoc:
         raw_response = response = nil
         success = false
         begin
-          raw_response = ssl_request(method, LIVE_URL + url, post_data(parameters), headers(meta))
+          raw_response = ssl_request(method, self.live_url + url, post_data(parameters), headers(meta))
           response = parse(raw_response)
           success = !response.key?("error")
         rescue ResponseError => e
@@ -215,7 +213,7 @@ module ActiveMerchant #:nodoc:
         Response.new(success,
           success ? "Transaction approved" : response["error"]["message"],
           response,
-          :test => !response["livemode"],
+          :test => response.has_key?("livemode") ? !response["livemode"] : false,
           :authorization => response["id"],
           :avs_result => { :code => avs_code },
           :cvv_result => cvc_code
